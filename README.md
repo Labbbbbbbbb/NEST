@@ -6,7 +6,7 @@
 
 - GiGPO：保留原实现、环境交互、奖励转换、训练调度和更新链路。
 - GRPO：保留作为同环境、同预算的对照基线。
-- ARPO / TAPO：尚未实现，已确认目标为 RUC-NLPIR/ARPO 与 Sunrepe/TAPO；不能通过改算法名称获得这些方法。
+- ARPO / TAPO：尚未实现
 - 本次是工程整理，不是论文结果复现；未进行 GPU 训练验证。
 - 保留 `verl`、`agent_system`、`gigpo` 的 Python 导入名，避免破坏原有动态导入和检查点工具。
 

@@ -1,6 +1,7 @@
 ##由于GPU资源有限，以下很多size有关参数都被zyt修改过，需要原文件去网上下
 set -x
 ENGINE=${1:-vllm}
+if [[ $# -gt 0 ]]; then shift; fi
 export VLLM_ATTENTION_BACKEND=XFORMERS
 
 num_cpus_per_env_worker=1 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
@@ -71,4 +72,4 @@ python3 -m verl.trainer.main_ppo \
     trainer.total_epochs=150 \
     trainer.val_before_train=True\
     actor_rollout_ref.rollout.max_num_seqs=8 \
-    actor_rollout_ref.rollout.max_num_batched_tokens=4096 $@
+    actor_rollout_ref.rollout.max_num_batched_tokens=4096 "$@"
