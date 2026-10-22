@@ -17,7 +17,6 @@ Note that we don't combine the main with ray_trainer as ray_trainer is used by o
 
 # 新手阅读路线：main → run_ppo → TaskRunner.run → trainer.init_workers → trainer.fit。
 # 本文件负责组装训练组件；多轮环境交互和模型更新的具体循环在 ray_trainer.py。
-# Agent 在这里指：读取环境观测、用语言模型生成动作、执行动作并获得奖励的系统。
 # GiGPO 的选择由 algorithm.adv_estimator=gigpo 决定，不由本文件名中的 ppo 决定。
 import os
 
@@ -70,6 +69,15 @@ def run_ppo(config) -> None:
     # 这里虽然使用异步提交，但紧接着 ray.get，所以启动进程会等待整个训练完成。
     runner = TaskRunner.remote()
     ray.get(runner.run.remote(config))
+    '''
+    run(config) 内部会依次：
+    1. 准备模型文件、环境、tokenizer 和数据集。
+    2. 创建训练器 RayPPOTrainer。
+    3. 调用 trainer.init_workers()，初始化计算 worker 和模型。
+    4. 调用 trainer.fit()，执行训练循环。
+    直到 trainer.fit() 结束,run()才会结束，外面的 ray.get() 才能返回。 
+    因此可能等待几分钟、几小时，甚至更久，取决于训练配置和资源。
+    '''
 
 
 # 将这个类注册为 Ray actor：实例在独立进程中运行，并申请 1 个 CPU 调度资源。
@@ -155,7 +163,7 @@ class TaskRunner:
         # ray.remote(类) 得到可远程创建的类，并不会在此处立即启动该 worker。
         # 字典只是登记 Role → 远程类，稍后 init_workers 才按需要创建实例。
         role_worker_mapping = {
-            Role.ActorRollout: ray.remote(actor_rollout_cls),
+            Role.ActorRollout: ray.remote(actor_rollout_cls),  #actor_rollout_cls = ActorRolloutRefWorker 或者 AsyncActorRolloutRefWorker
             Role.Critic: ray.remote(CriticWorker),
         }
 
