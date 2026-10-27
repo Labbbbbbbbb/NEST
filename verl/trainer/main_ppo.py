@@ -137,7 +137,7 @@ class TaskRunner:
             from verl.single_controller.ray import RayWorkerGroup
             from verl.workers.fsdp_workers import ActorRolloutRefWorker, AsyncActorRolloutRefWorker, CriticWorker
 
-            # 同步/异步 rollout 对应不同 worker 实现；这里只选择类，尚未实例化。
+            # 同步/异步 rollout 对应不同 worker 实现；这里只选择类，尚未实例化。当前配置是sync
             actor_rollout_cls = AsyncActorRolloutRefWorker if config.actor_rollout_ref.rollout.mode == "async" else ActorRolloutRefWorker
             ray_worker_group_cls = RayWorkerGroup
 
@@ -202,7 +202,7 @@ class TaskRunner:
         # 若奖励或训练损失中使用 KL，就需要参考策略来衡量当前策略偏离了多少。
         # 参考策略用于提供比较基准，与执行环境动作的当前策略职责不同。
         if config.algorithm.use_kl_in_reward or config.actor_rollout_ref.actor.use_kl_loss:
-            role_worker_mapping[Role.RefPolicy] = ray.remote(ActorRolloutRefWorker)
+            role_worker_mapping[Role.RefPolicy] = ray.remote(ActorRolloutRefWorker) #相当于如果要用kl散度的话就提前创建实例记录参考模型
             mapping[Role.RefPolicy] = global_pool_id
 
         # reward manager 把已有的奖励信息整理成训练所需的张量，不一定是神经网络。
@@ -229,7 +229,7 @@ class TaskRunner:
         # 汇总“有哪些 GPU”和“各角色使用哪个池”，交给训练器创建实际 worker。
         resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
 
-        # 两个 n 容易混淆：这里让推理引擎每个输入只生成 1 个回答；
+        # 两个 n 容易混淆：这里actor_rollout_ref.rollout.n指给定当前输入，一次生成几个候选回答/动作；
         # 同一任务采样多条完整交互轨迹，由 env.rollout.n 控制。
         assert config.actor_rollout_ref.rollout.n == 1, "In verl, actor_rollout_ref.rollout.n>1 is for GRPO. In verl+env, we keep n=1, and achieve GRPO by env.rollout.n"
 

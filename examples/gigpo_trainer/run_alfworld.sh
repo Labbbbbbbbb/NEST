@@ -6,11 +6,11 @@ fi
 # export VLLM_ATTENTION_BACKEND=XFORMERS
 export VLLM_ATTENTION_BACKEND=FLASH_ATTN  #changed by zyt
 
+                            #0.1
+num_cpus_per_env_worker=1 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
 
-num_cpus_per_env_worker=0.1 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
-
-train_data_size=16
-val_data_size=128
+train_data_size=1  #16  ,这两个数太大容易把前面负责rollout的worker搞deid掉，下面ppo_micro_batch_size_per_gpu太大容易导致GPU OOM （原脚本是32）
+val_data_size=2   #128
 group_size=8
 mode="mean_std_norm" # "mean_norm" or "mean_std_norm"
 
@@ -35,7 +35,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=256 \
-    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=32 \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=2 \
     actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.kl_loss_coef=0.01 \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
@@ -43,7 +43,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=32 \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=$ENGINE \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
