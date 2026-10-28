@@ -498,7 +498,7 @@ class RayPPOTrainer:
         config,
         tokenizer,
         role_worker_mapping: dict[Role, WorkerType],
-        resource_pool_manager: ResourcePoolManager,
+        resource_pool_manager: ResourcePoolManager,         #:后面表示类型注解，=后面表示默认传入的实例
         ray_worker_group_cls: RayWorkerGroup = RayWorkerGroup,
         processor=None,
         reward_fn=None,
@@ -540,7 +540,8 @@ class RayPPOTrainer:
         self.device_name = device_name
         self.validation_generations_logger = ValidationGenerationsLogger()
 
-        # if ref_in_actor is True, the reference policy will be actor without lora applied
+        # if ref_in_actor is True, 表示使用LoRA，
+        # the reference policy will be actor without lora applied，意思是如果使用了lora，参考模型的获得方法就是actor模型去掉lora参数的版本。
         # .get(key, default) 在缺少配置时使用默认值。
         # LoRA 场景可禁用策略的适配器，用底座模型计算参考概率，复用模型主体。
         self.ref_in_actor = config.actor_rollout_ref.model.get('lora_rank', 0) > 0
@@ -579,22 +580,28 @@ class RayPPOTrainer:
         n_gpus = config.trainer.n_gpus_per_node * config.trainer.nnodes
 
         # 1. Check total batch size for data correctness
-        real_train_batch_size = config.data.train_batch_size * config.actor_rollout_ref.rollout.n
+        # 这里读取yaml配置中的batch size，但是通常令行参数会覆盖 YAML 里的值。
+        real_train_batch_size = config.data.train_batch_size * config.actor_rollout_ref.rollout.n   #在这个背景config.actor_rollout_ref.rollout.n固定为1
         assert real_train_batch_size % n_gpus == 0, f"real_train_batch_size ({real_train_batch_size}) must be divisible by total n_gpus ({n_gpus})."
 
         # A helper function to check "micro_batch_size" vs "micro_batch_size_per_gpu"
         # We throw an error if the user sets both. The new convention is "..._micro_batch_size_per_gpu".
+        # 这个函数用来给每个batch参数自适应分配per_gpu版本，但是避免用户同时设置两个参数或者两个都没有设置
         def check_mutually_exclusive(mbs, mbs_per_gpu, name: str):
             # 嵌套函数只供当前校验流程复用；None 表示未设置，不等同于数字 0。
-            settings = {
+            settings = {        #这里的settings
                 "actor_rollout_ref.actor": "micro_batch_size",
                 "critic": "micro_batch_size",
                 "reward_model": "micro_batch_size",
                 "actor_rollout_ref.ref": "log_prob_micro_batch_size",
                 "actor_rollout_ref.rollout": "log_prob_micro_batch_size",
             }
-
-            if name in settings:
+            '''
+            name是当前检查的模块名称，例如 "actor_rollout_ref.actor"。param则通过字典获得当前模块对应要检查的参数名称
+            这一段的意思是actor、critic、reward model：检查处理数据时的 micro_batch_size。
+            ref、rollout：检查计算 log probability 时的 log_prob_micro_batch_size。
+            '''
+            if name in settings:    
                 param = settings[name]
                 param_per_gpu = f"{param}_per_gpu"
 
@@ -605,6 +612,7 @@ class RayPPOTrainer:
                     raise ValueError(f"[{name}] You have set both '{name}.{param}' AND '{name}.{param_per_gpu}'. Please remove '{name}.{param}' because only '*_{param_per_gpu}'" + "is supported (the former is deprecated).")
 
         if not config.actor_rollout_ref.actor.use_dynamic_bsz:
+            #如果没有使用动态 batch，就检查固定 micro batch 的设置。 动态 batch 会根据 token 数等限制组织数据，因此这里跳过这组固定大小检查。
             # actor: ppo_micro_batch_size vs. ppo_micro_batch_size_per_gpu
             check_mutually_exclusive(
                 config.actor_rollout_ref.actor.ppo_micro_batch_size,
@@ -638,15 +646,14 @@ class RayPPOTrainer:
         # Actor
         # check if train_batch_size is larger than ppo_mini_batch_size
         # if NOT dynamic_bsz, we must ensure:
-        #    ppo_mini_batch_size is divisible by ppo_micro_batch_size
+        #    ppo_mini_batch_size is divisible by ppo_micro_batch_size   mini：一次ppo更新用的batch，micro：一次前向/反向（真正的同一时刻）处理的小块
         #    ppo_micro_batch_size * sequence_parallel_size >= n_gpus
         if not config.actor_rollout_ref.actor.use_dynamic_bsz:
             # assert config.data.train_batch_size >= config.actor_rollout_ref.actor.ppo_mini_batch_size
-            sp_size = config.actor_rollout_ref.actor.get("ulysses_sequence_parallel_size", 1)
+            sp_size = config.actor_rollout_ref.actor.get("ulysses_sequence_parallel_size", 1)  #获得 sequence parallel size，默认为1，意义是多少张cpu来处理一个序列（batch里每一条各需要这么多gpu）
             if config.actor_rollout_ref.actor.ppo_micro_batch_size is not None:
                 assert config.actor_rollout_ref.actor.ppo_mini_batch_size % config.actor_rollout_ref.actor.ppo_micro_batch_size == 0
-                assert config.actor_rollout_ref.actor.ppo_micro_batch_size * sp_size >= n_gpus
-
+                assert config.actor_rollout_ref.actor.ppo_micro_batch_size * sp_size >= n_gpus  #是对micro_batch_size的要求，要求其至少为多少才能满足每个组至少分到一条数据
         assert config.actor_rollout_ref.actor.loss_agg_mode in [
             "token-mean",
             "seq-mean-token-sum",
@@ -676,7 +683,9 @@ class RayPPOTrainer:
 
         if config.data.get("val_batch_size", None) is not None:
             print("WARNING: val_batch_size is deprecated." + " Validation datasets are sent to inference engines as a whole batch," + " which will schedule the memory themselves.")
-
+            # val_batch_size 已弃用。验证数据会整批交给推理引擎，由引擎自行调度显存和执行。
+            #ps:这个参数已经被作者标记为弃用，检测到你还在设置它，就打印警告。is not None 只是触发警告的条件；“弃用”是开发者对这个参数的说明。
+            
         # check eval config
         if config.actor_rollout_ref.rollout.val_kwargs.do_sample:
             assert config.actor_rollout_ref.rollout.temperature > 0, "validation gen temperature should be greater than 0 when enabling do_sample"
@@ -700,7 +709,7 @@ class RayPPOTrainer:
         # TODO: we have to make sure the batch size is divisible by the dp size
         from verl.trainer.main_ppo import create_rl_dataset, create_rl_sampler
 
-        if train_dataset is None:
+        if train_dataset is None:       #这里的train_files是gsm8k数据集，如果传进来的数据是none就用这个占位文件
             train_dataset = create_rl_dataset(self.config.data.train_files, self.config.data, self.tokenizer, self.processor)
         if val_dataset is None:
             val_dataset = create_rl_dataset(self.config.data.val_files, self.config.data, self.tokenizer, self.processor)
@@ -712,6 +721,13 @@ class RayPPOTrainer:
             from verl.utils.dataset.rl_dataset import collate_fn as default_collate_fn
 
             collate_fn = default_collate_fn
+            
+            '''
+            Dataset 给出：样本1、样本2、样本3……
+            Sampler 决定：先取3，再取1……
+            collate_fn：把取出的几条拼成一个 batch
+            '''
+        
 
         # drop_last=True 丢弃最后不足一批的数据，方便训练时均分到各 GPU；
         # 验证使用 False，尽量覆盖所有样本。num_workers 是数据加载子进程数。
@@ -724,9 +740,17 @@ class RayPPOTrainer:
             sampler=train_sampler,
         )
 
-        val_batch_size = self.config.data.val_batch_size  # Prefer config value if set
+        val_batch_size = self.config.data.val_batch_size  # Prefer config value if set 
         if val_batch_size is None:
             val_batch_size = len(self.val_dataset)
+            '''
+            | 配置 | 实际行为 |
+            |---|---|
+            | `val_batch_size: 16` | 每批最多取 16 条验证数据，同时打印弃用警告 |
+            | `val_batch_size: null` | 整个验证集作为一批 |
+            似乎上面虽然说弃用了但还是有用
+            '''
+            
 
         self.val_dataloader = StatefulDataLoader(
             dataset=self.val_dataset,

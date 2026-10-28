@@ -217,10 +217,10 @@ class TaskRunner:
             raise NotImplementedError
 
         # normalize_by_length=False：不把 episode 总回报除以轨迹长度。
-        # num_examine 控制用于查看样本的打印额度，不影响算法选择。
+        # num_examine 控制用于查看样本的打印额度，不影响算法选择。也就是说reward_fn和val_reward_fn其实完全相同，只是后者作为验证会有一些随机打印机制
         # 【对象也能像函数调用】这里先用 类名(...) 创建奖励管理器实例。
         # 它实现了 __call__ 方法，因此后续 reward_fn(batch) 实际执行
-        # reward_fn.__call__(batch)。变量名叫 fn，但保存的可以是可调用对象。
+        # reward_fn.__call__(batch)。变量名叫 fn，但保存的可以是可调用对象。    
         reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=0, normalize_by_length=False)
 
         # Note that we always use function-based RM for validation
