@@ -2,7 +2,6 @@
 #SBATCH --job-name=train_tapo
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:2
 #SBATCH --mem=256G
 #SBATCH --partition=project3-1
@@ -20,3 +19,12 @@ conda activate NEST
 bash examples/tapo_trainer/run_alfworld.sh vllm \
     'hydra.run.dir=outputs/tapo/${now:%Y-%m-%d}/${now:%H-%M-%S}' \
     hydra.job.chdir=False "$@"
+
+
+
+#只需要运行：sbatch scripts/train_tapo.sh
+
+# 验证：
+# sbatch scripts/train_tapo.sh \
+#   trainer.total_training_steps=1 \
+#   trainer.val_before_train=False
