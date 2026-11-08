@@ -51,6 +51,11 @@ bash scripts/train_gigpo.sh alfworld algorithm.adv_estimator=grpo
 # 源示例仍可直接使用：
 bash examples/gigpo_trainer/run_alfworld_lora.sh vllm
 ```
+ps.可以用输出重定向保存到当前目录的指定文件：
+```bash
+bash your_script.sh > output.log 2>&1 #这会把标准输出和错误输出都写入 output.log，并覆盖已有内容。
+bash your_script.sh >> output.log 2>&1 #追加内容而不覆盖：
+```
 
 数据准备脚本沿用上游：ALFWorld 的 text parquet 主要提供占位输入及样本数量，实际任务来自环境 reset；Search 使用真实查询数据，不能混用占位数据。数据准备可能访问 Hugging Face。
 WebShop、Search 和视觉环境需要额外安装与服务，见 `docs/UPSTREAM_README.md` 的对应章节；该文档保留原文，部分原有图片或示例链接已随精简移除。

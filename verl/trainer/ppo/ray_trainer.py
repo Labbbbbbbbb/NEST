@@ -64,10 +64,10 @@ from gigpo import core_gigpo
 
 from agent_system.multi_turn_rollout import TrajectoryCollector, adjust_batch
 
-# =========================== 新手阅读指南 ===========================
+# =========================== 阅读指南 ===========================
 # 本文件是训练的“调度中心”，不是模型网络或环境的实现。
 # 入口在 main_ppo.py：创建 RayPPOTrainer → init_workers() → fit()。
-# 建议先读 fit() 的主流程，再读 compute_advantage()，最后看资源管理和存档。
+# 先读 fit() 的主流程，再读 compute_advantage()，最后看资源管理和存档。
 #
 # 几个容易混淆的概念：
 # • Agent：根据观察选择动作，并与环境反复交互的系统；语言模型负责生成动作文本。
@@ -766,10 +766,11 @@ class RayPPOTrainer:
 
         print(f"Size of train dataloader: {len(self.train_dataloader)}, Size of val dataloader: {len(self.val_dataloader)}")
 
-        # 一次 dataloader 迭代对应一次外层训练 step，不对应一个环境动作或 token。
+        # 一次 dataloader 迭代对应一次外层训练 step，不对应一个环境动作或 token。（dataloader里的数据条数*epoches，也就是一共的迭代次数）
+        # 不是指梯度update次数，因为batch还会分成minibatch来更新，，PPO还会利用同一批数据进行不止一次的更新
         total_training_steps = len(self.train_dataloader) * self.config.trainer.total_epochs
 
-        if self.config.trainer.total_training_steps is not None:
+        if self.config.trainer.total_training_steps is not None:    #就是null，所以这个不会运行
             total_training_steps = self.config.trainer.total_training_steps
 
         self.total_training_steps = total_training_steps
@@ -777,7 +778,7 @@ class RayPPOTrainer:
 
         try:
             # struct 模式限制新增未知配置字段；open_dict 临时开放配置修改。
-            # 把总步数写入优化器配置，供学习率调度器安排预热/衰减。
+            # 把总步数total_training_steps写入actor和critic的优化器配置，供学习率调度器安排预热/衰减。
             OmegaConf.set_struct(self.config, True)
             with open_dict(self.config):
                 if OmegaConf.select(self.config, "actor_rollout_ref.actor.optim"):
@@ -789,6 +790,7 @@ class RayPPOTrainer:
 
     def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path):
         """Dump rollout/validation samples as JSONL."""
+        # 用来组织rollout的结果，整理成json文件，可以看到所有的生成内容和环境分数
         # JSONL 每行一个样本对象，便于逐行查看和后处理。
         # exist_ok=True 允许目录已存在；ensure_ascii=False 保留中文字符。
         os.makedirs(dump_path, exist_ok=True)
@@ -796,14 +798,16 @@ class RayPPOTrainer:
 
         n = len(inputs)
         base_data = {
+            # 离线部分数据集，也就是前面dataloader摇出来的部分只包含prompt输入，也就是input部分
             "input": inputs,
             "output": outputs,
             "score": scores,
             "step": [self.global_steps] * n,
+            #"step" 字段，值是包含 n 个当前训练步数的列表：
         }
 
         for k, v in reward_extra_infos_dict.items():
-            if len(v) == n:
+            if len(v) == n:  #一层过滤，只保存能按当前 batch 的样本数逐条取值的字段。
                 base_data[k] = v
 
         with open(filename, "w") as f:
