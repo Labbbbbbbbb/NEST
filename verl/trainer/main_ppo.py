@@ -201,7 +201,7 @@ class TaskRunner:
         # use reference model
         # 若奖励或训练损失中使用 KL，就需要参考策略来衡量当前策略偏离了多少。
         # 参考策略用于提供比较基准，与执行环境动作的当前策略职责不同。
-        if config.algorithm.use_kl_in_reward or config.actor_rollout_ref.actor.use_kl_loss:
+        if config.algorithm.adv_estimator == "tapo" or config.algorithm.use_kl_in_reward or config.actor_rollout_ref.actor.use_kl_loss:
             role_worker_mapping[Role.RefPolicy] = ray.remote(ActorRolloutRefWorker) #相当于如果要用kl散度的话就提前创建实例记录参考模型
             mapping[Role.RefPolicy] = global_pool_id
 

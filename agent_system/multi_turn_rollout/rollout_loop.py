@@ -177,10 +177,12 @@ class TrajectoryCollector:
             'attention_mask': attention_mask[0],
             'position_ids': position_ids[0],
             'raw_prompt_ids': raw_prompt_ids,
-            'anchor_obs': _obs_anchor,
             'index': item,
             'data_source': data_source
         })
+
+        if self.config.algorithm.adv_estimator != 'tapo':
+            row_dict['anchor_obs'] = _obs_anchor
 
         if self.config.data.get('return_raw_chat', False):
             row_dict['raw_prompt'] = chat.tolist()
@@ -264,6 +266,9 @@ class TrajectoryCollector:
             for data in total_batch_list[bs]:
                 assert traj_uid[bs] == data['traj_uid'], "data is not from the same trajectory"
                 if data['active_masks']:
+                    if self.config.algorithm.adv_estimator == 'tapo':
+                        # Preserve the individual outcome, not the batch success rate.
+                        data['tapo_success'] = float(success['success_rate'][bs])
                     # episode_rewards
                     data['episode_rewards'] = episode_rewards[bs]
                     # episode_lengths

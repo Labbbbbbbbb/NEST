@@ -29,6 +29,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 import verl.utils.torch_functional as verl_F
 from verl import DataProto
+from tapo.core_tapo import compute_tapo_loss, sample_mean
 from verl.trainer.ppo.core_algos import agg_loss, compute_policy_loss, compute_policy_loss_gspo, kl_penalty
 from verl.utils.debug import GPUMemoryLogger
 from verl.utils.device import get_device_name, get_torch_device, is_cuda_available, is_npu_available
@@ -324,7 +325,12 @@ class DataParallelPPOActor(BasePPOActor):
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages"]
         if multi_turn:
             select_keys.append("loss_mask")
-        if self.config.use_kl_loss:
+        tapo_mode = self.config.policy_loss.get("loss_mode", "vanilla") == "tapo"
+        if tapo_mode:
+            select_keys.append("tapo_advantage")
+            if self.config.entropy_coeff != 0:
+                raise ValueError("TAPO uses entropy filtering; set entropy_coeff=0")
+        if self.config.use_kl_loss or tapo_mode:
             select_keys.append("ref_log_prob")
         batch = data.select(batch_keys=select_keys).batch
         has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
@@ -383,29 +389,48 @@ class DataParallelPPOActor(BasePPOActor):
 
                     # all return: (bsz, response_length)
                     calculate_entropy = False
-                    if entropy_coeff != 0:
+                    if entropy_coeff != 0 or tapo_mode:
                         calculate_entropy = True
                     entropy, log_prob = self._forward_micro_batch(micro_batch=data, temperature=temperature, calculate_entropy=calculate_entropy)
                     
                     loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
-                    if loss_mode == "vanilla":
+                    if loss_mode == "tapo":
+                        policy_loss_fn = None
+                    elif loss_mode == "vanilla":
                         policy_loss_fn = compute_policy_loss
                     elif loss_mode == "gspo":
                         policy_loss_fn = compute_policy_loss_gspo
                     else:
                         raise ValueError(f"Unsupported loss_mode: {loss_mode}")
 
-                    pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(
-                        old_log_prob=old_log_prob,
-                        log_prob=log_prob,
-                        advantages=advantages,
-                        response_mask=response_mask,
-                        cliprange=clip_ratio,
-                        cliprange_low=clip_ratio_low,
-                        cliprange_high=clip_ratio_high,
-                        clip_ratio_c=clip_ratio_c,
-                        loss_agg_mode=loss_agg_mode,
-                    )
+                    if tapo_mode:
+                        tapo_config = self.config.policy_loss
+                        pg_loss, tapo_metrics = compute_tapo_loss(
+                            log_prob, data["ref_log_prob"], advantages,
+                            response_mask * (data["tapo_advantage"] != 0).unsqueeze(-1), entropy,
+                            epsilon=tapo_config.get("tapo_epsilon", 0.2),
+                            entropy_threshold=tapo_config.get("tapo_entropy_threshold", 0.01),
+                        )
+                        append_to_dict(metrics, tapo_metrics)
+                        pg_loss = pg_loss * tapo_config.get("tapo_loss_coef", 0.8)
+                        # Optional RFT on successful outcomes, without entropy filtering.
+                        ce_mask = response_mask * (data["tapo_advantage"] > 0).unsqueeze(-1)
+                        ce_loss = -sample_mean(log_prob, ce_mask)
+                        pg_loss = pg_loss + tapo_config.get("tapo_ce_coef", 0.2) * ce_loss
+                        append_to_dict(metrics, {"actor/tapo_ce_loss": ce_loss.detach().item()})
+                        pg_clipfrac = ppo_kl = pg_clipfrac_lower = log_prob.detach().new_zeros(())
+                    else:
+                        pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(
+                            old_log_prob=old_log_prob,
+                            log_prob=log_prob,
+                            advantages=advantages,
+                            response_mask=response_mask,
+                            cliprange=clip_ratio,
+                            cliprange_low=clip_ratio_low,
+                            cliprange_high=clip_ratio_high,
+                            clip_ratio_c=clip_ratio_c,
+                            loss_agg_mode=loss_agg_mode,
+                        )
 
                     if entropy_coeff != 0:
                         entropy_loss = agg_loss(loss_mat=entropy, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
@@ -419,7 +444,10 @@ class DataParallelPPOActor(BasePPOActor):
                         ref_log_prob = data["ref_log_prob"]
                         # compute kl loss
                         kld = kl_penalty(logprob=log_prob, ref_logprob=ref_log_prob, kl_penalty=self.config.kl_loss_type)
-                        kl_loss = agg_loss(loss_mat=kld, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+                        if tapo_mode:
+                            kl_loss = sample_mean(kld, response_mask * (data["tapo_advantage"] != 0).unsqueeze(-1))
+                        else:
+                            kl_loss = agg_loss(loss_mat=kld, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
 
                         policy_loss = policy_loss + kl_loss * self.config.kl_loss_coef
                         metrics["actor/kl_loss"] = kl_loss.detach().item()
@@ -429,7 +457,10 @@ class DataParallelPPOActor(BasePPOActor):
                         # relative to the dynamic bsz
                         loss = policy_loss * (len(data) / self.config.ppo_mini_batch_size)
                     else:
-                        loss = policy_loss / self.gradient_accumulation
+                        if tapo_mode:
+                            loss = policy_loss * (responses.size(0) / mini_batch.batch_size[0])
+                        else:
+                            loss = policy_loss / self.gradient_accumulation
                     loss.backward()
 
                     data = {

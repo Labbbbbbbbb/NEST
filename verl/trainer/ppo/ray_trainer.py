@@ -60,7 +60,7 @@ from verl.utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seql
 from verl.utils.torch_functional import masked_mean
 from verl.utils.tracking import ValidationGenerationsLogger
 from verl.workers.rollout.async_server import AsyncLLMServerManager
-from gigpo import core_gigpo
+from tapo.core_tapo import trajectory_advantages
 
 from agent_system.multi_turn_rollout import TrajectoryCollector, adjust_batch
 
@@ -133,6 +133,7 @@ class AdvantageEstimator(str, Enum):
     RLOO = "rloo"
     GRPO_PASSK = "grpo_passk"
     GiGPO = 'gigpo'
+    TAPO = 'tapo'
 
 
 @dataclass
@@ -431,7 +432,15 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         )
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
+    elif adv_estimator == AdvantageEstimator.TAPO:
+        mask = data.batch["response_mask"]
+        if multi_turn:
+            mask = data.batch["loss_mask"][:, -mask.size(-1):]
+        advantages = data.batch["tapo_advantage"].to(mask.device).unsqueeze(-1) * mask
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = advantages.clone()
     elif adv_estimator == AdvantageEstimator.GiGPO:
+        from gigpo import core_gigpo
         # GiGPO 同时考虑“整条轨迹好不好”和“相近观察下，这一步做得好不好”：
         # 最终优势 = episode 级相对优势 + step_advantage_w * step 级相对优势。
         # anchor_obs 用于按观察分组；相似度开关允许按文本相似性合并观察。
@@ -561,11 +570,22 @@ class RayPPOTrainer:
             AdvantageEstimator.REMAX,
             AdvantageEstimator.RLOO,
             AdvantageEstimator.REINFORCE_PLUS_PLUS_BASELINE,
-            AdvantageEstimator.GiGPO
+            AdvantageEstimator.GiGPO,
+            AdvantageEstimator.TAPO
         ]:
             self.use_critic = False
         else:
             raise NotImplementedError
+
+        if self.config.algorithm.adv_estimator == AdvantageEstimator.TAPO:
+            if self.config.actor_rollout_ref.actor.policy_loss.loss_mode != "tapo":
+                raise ValueError("TAPO requires actor.policy_loss.loss_mode=tapo")
+            if self.config.algorithm.filter_groups.enable:
+                raise ValueError("TAPO uses binary outcomes; disable reward-based filter_groups")
+            if self.config.actor_rollout_ref.actor.use_invalid_action_penalty or self.config.algorithm.use_kl_in_reward:
+                raise ValueError("TAPO uses binary success labels; disable reward shaping")
+            if self.config.env.rollout.n < 2:
+                raise ValueError("TAPO outcome standardization requires env.rollout.n >= 2")
 
         self._validate_config()
         self._create_dataloader(train_dataset, val_dataset, collate_fn, train_sampler)
@@ -1320,7 +1340,18 @@ class RayPPOTrainer:
                     # del 仅解除本地名称绑定，不代表强制清空 GPU 显存或删除磁盘数据。
                     batch = gen_batch_output
 
+                    if self.config.algorithm.adv_estimator == AdvantageEstimator.TAPO:
+                        # Calculate once on complete, unpadded trajectories.
+                        scores = batch.non_tensor_batch["tapo_success"]
+                        batch.batch["tapo_advantage"] = trajectory_advantages(
+                            batch.non_tensor_batch["uid"], batch.non_tensor_batch["traj_uid"], scores
+                        ).to(batch.batch["responses"].device)
+                        metrics["tapo/nonzero_advantage_fraction"] = (batch.batch["tapo_advantage"] != 0).float().mean().item()
+                        if not (batch.batch["tapo_advantage"] != 0).any().item():
+                            print("[TAPO] No mixed success/failure groups; skipping optimizer update.")
+                            continue
                     if self.config.algorithm.adv_estimator == AdvantageEstimator.GiGPO:
+                        from gigpo import core_gigpo
                         # 【阶段 2：整理经历】先按轨迹顺序计算 G_t = r_t + gamma * G_{t+1}。
                         # 必须在重排之前做，因为该函数依赖同轨迹 step 在批次中的先后顺序。
                         step_rewards_tensor = core_gigpo.compute_step_discounted_returns(
@@ -1468,10 +1499,12 @@ class RayPPOTrainer:
                             use_pf_ppo=self.config.algorithm.use_pf_ppo,
                             pf_ppo_reweight_method=self.config.algorithm.pf_ppo.reweight_method,
                             pf_ppo_weight_pow=self.config.algorithm.pf_ppo.weight_pow,
-                            step_advantage_w=self.config.algorithm.gigpo.step_advantage_w,
-                            gigpo_mode=self.config.algorithm.gigpo.mode,
-                            gigpo_enable_similarity= self.config.algorithm.gigpo.enable_similarity,
-                            gigpo_similarity_thresh=self.config.algorithm.gigpo.similarity_thresh,
+                            **({
+                                "step_advantage_w": self.config.algorithm.gigpo.step_advantage_w,
+                                "gigpo_mode": self.config.algorithm.gigpo.mode,
+                                "gigpo_enable_similarity": self.config.algorithm.gigpo.enable_similarity,
+                                "gigpo_similarity_thresh": self.config.algorithm.gigpo.similarity_thresh,
+                            } if self.config.algorithm.adv_estimator == AdvantageEstimator.GiGPO else {}),
                         )
 
                     # update critic
