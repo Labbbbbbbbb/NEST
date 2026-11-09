@@ -61,7 +61,7 @@ W&B 的默认实验名改为 `<算法>_<模型>_<启动时间>`，例如 `gigpo_
 可用 `WANDB_DIR` 自定义外层目录，或用 `trainer.experiment_name` 自定义实验显示名称；已有日志不移动。
 
 命令行仍可通过 `'trainer.logger=[console,tensorboard]'` 等覆盖默认后端。
-直接运行 `examples/` 下脚本时，请显式添加 `'trainer.logger=[console,wandb,tensorboard]'`；上述独立目录逻辑仅由项目入口提供。
+ALFWorld 的 GiGPO 示例脚本也默认启用三种日志后端；上述统一命名及独立目录逻辑由项目入口提供。
 
 ```bash
 bash scripts/train_gigpo.sh alfworld trainer.total_epochs=150

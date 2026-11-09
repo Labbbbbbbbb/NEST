@@ -64,7 +64,7 @@ python3 -m verl.trainer.main_ppo \
     env.resources_per_worker.num_cpus=0.1 \
     ray_init.num_cpus="$RAY_CPUS" \
     trainer.critic_warmup=0 \
-    'trainer.logger=[console]' \
+    'trainer.logger=[console,wandb,tensorboard]' \
     trainer.project_name=nest \
     trainer.experiment_name=tapo_alfworld \
     trainer.n_gpus_per_node="$N_GPUS" \
