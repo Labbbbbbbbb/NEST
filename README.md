@@ -42,7 +42,26 @@ bash scripts/train_gigpo.sh alfworld trainer.total_training_steps=1 trainer.val_
 
 正式运行时去掉上述 smoke 覆盖项，并按机器资源配置 batch、GPU、显存和训练步数。
 这不是“单步运行即复现论文”；原示例已有本地小显存改动，见 SOURCE_MANIFEST.json。
-默认日志为 console；需要 wandb 时显式覆盖 trainer.logger。
+通过 `scripts/train_gigpo.sh` 启动时，默认同时启用 `console`、`wandb` 和 `tensorboard`。
+TensorBoard 标量日志保存在服务器的 `outputs/tensorboard/<算法>_<模型>_<启动时间>/`，每次运行独立保存；启动日志会打印实际路径。
+`tensorboard` 已加入项目依赖；已有环境可执行 `python -m pip install tensorboard`。
+
+```bash
+# 可选：指定本次训练的日志目录（不同实验请使用不同目录）
+TENSORBOARD_DIR="$PWD/outputs/tensorboard/my_run" bash scripts/train_gigpo.sh alfworld
+
+# 在能访问上述日志目录的服务器上启动查看服务
+tensorboard --logdir /data/home/zdhs0200/NEST/outputs/tensorboard --host 127.0.0.1 --port 6006
+```
+
+在 VS Code Remote SSH 的“端口 / Ports”面板转发该服务器的 6006 端口，再打开面板提供的本机地址。
+TensorBoard 只读取服务器本地事件文件，不会自动上传；W&B 继续按原配置记录，需要正常认证及网络访问。
+W&B 的默认实验名改为 `<算法>_<模型>_<启动时间>`，例如 `gigpo_Qwen2.5-1.5B-Instruct_20261109_231500`；算法名和模型名分别跟随 `algorithm.adv_estimator`、`actor_rollout_ref.model.path` 覆盖项；两种日志使用同一个运行名称。
+本地文件保存在 `outputs/wandb/<算法>_<模型>_<启动时间>/wandb/run-*/`，保留 W&B 自身生成的内部目录名。
+可用 `WANDB_DIR` 自定义外层目录，或用 `trainer.experiment_name` 自定义实验显示名称；已有日志不移动。
+
+命令行仍可通过 `'trainer.logger=[console,tensorboard]'` 等覆盖默认后端。
+直接运行 `examples/` 下脚本时，请显式添加 `'trainer.logger=[console,wandb,tensorboard]'`；上述独立目录逻辑仅由项目入口提供。
 
 ```bash
 bash scripts/train_gigpo.sh alfworld trainer.total_epochs=150

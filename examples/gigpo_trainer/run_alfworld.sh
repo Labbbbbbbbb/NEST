@@ -96,7 +96,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.experiment_name='gigpo_qwen2.5_1.5b' \
     trainer.n_gpus_per_node=2 \
     trainer.nnodes=1 \
-    trainer.save_freq=-1 \
+    trainer.save_freq=25 \
     trainer.test_freq=5 \
     trainer.total_epochs=150 \
     trainer.val_before_train=True \
