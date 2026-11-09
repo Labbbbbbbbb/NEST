@@ -44,11 +44,51 @@ case "$ENV_NAME" in
   alfworld|webshop|sokoban) ;;
   *) echo "Supported wrapper environments: alfworld, webshop, sokoban" >&2; exit 2 ;;
 esac
+
+# 与各环境启动脚本中的默认模型保持一致。
+case "$ENV_NAME" in
+  sokoban) MODEL_PATH="Qwen/Qwen2.5-VL-3B-Instruct" ;;
+  *) MODEL_PATH="Qwen/Qwen2.5-1.5B-Instruct" ;;
+esac
+
+# 从命令行覆盖项取得算法和模型；与 Hydra 一样，最后一个覆盖项生效。
+ALGORITHM="gigpo"
+for arg in "$@"; do
+  case "$arg" in
+    algorithm.adv_estimator=*|+algorithm.adv_estimator=*|++algorithm.adv_estimator=*)
+      ALGORITHM="${arg#*=}"
+      ALGORITHM="${ALGORITHM//\'/}"
+      ALGORITHM="${ALGORITHM//\"/}"
+      ;;
+    actor_rollout_ref.model.path=*|+actor_rollout_ref.model.path=*|++actor_rollout_ref.model.path=*)
+      MODEL_PATH="${arg#*=}"
+      MODEL_PATH="${MODEL_PATH//\'/}"
+      MODEL_PATH="${MODEL_PATH//\"/}"
+      ;;
+  esac
+done
+# 仓库 ID 和本地路径均取最后一级作为模型名。
+MODEL_NAME="${MODEL_PATH%/}"
+MODEL_NAME="${MODEL_NAME##*/}"
+RUN_NAME="${ALGORITHM//[^a-zA-Z0-9_-]/_}_${MODEL_NAME//[^a-zA-Z0-9._-]/_}_$(date +%Y%m%d_%H%M%S)"
+export WANDB_DIR="${WANDB_DIR:-$PROJECT_ROOT/outputs/wandb/$RUN_NAME}"
+mkdir -p "$WANDB_DIR"
+echo "W&B 实验名称：$RUN_NAME"
+echo "W&B 本地日志目录：$WANDB_DIR"
+
+# 同时记录到控制台、W&B 和服务器本地 TensorBoard；每次运行独立保存。
+export TENSORBOARD_DIR="${TENSORBOARD_DIR:-$PROJECT_ROOT/outputs/tensorboard/$RUN_NAME}"
+mkdir -p "$TENSORBOARD_DIR"
+echo "TensorBoard 日志目录：$TENSORBOARD_DIR"
+
 exec bash -e "$PROJECT_ROOT/examples/gigpo_trainer/run_${ENV_NAME}.sh" vllm \
   'hydra.run.dir='"$PROJECT_ROOT"'/outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}' \
   hydra.job.chdir=False \
   trainer.project_name=nest \
-  trainer.experiment_name="gigpo_${ENV_NAME}" \
+  trainer.experiment_name="$RUN_NAME" \
+  'trainer.logger=[console,wandb,tensorboard]' \
+  "++ray_init.runtime_env.env_vars.TENSORBOARD_DIR=$TENSORBOARD_DIR" \
+  "++ray_init.runtime_env.env_vars.WANDB_DIR=$WANDB_DIR" \
    "$@"
 
 
