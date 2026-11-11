@@ -45,14 +45,19 @@ case "$ENV_NAME" in
   *) echo "Supported wrapper environments: alfworld, webshop, sokoban" >&2; exit 2 ;;
 esac
 
-# 与各环境启动脚本中的默认模型保持一致。
-case "$ENV_NAME" in
-  sokoban) MODEL_PATH="Qwen/Qwen2.5-VL-3B-Instruct" ;;
-  *) MODEL_PATH="Qwen/Qwen2.5-1.5B-Instruct" ;;
-esac
-
-# 从命令行覆盖项取得算法和模型；与 Hydra 一样，最后一个覆盖项生效。
-ALGORITHM="gigpo"
+# Read active literal defaults from the selected training script, avoiding stale copies.
+TRAIN_SCRIPT="$PROJECT_ROOT/examples/gigpo_trainer/run_${ENV_NAME}.sh"
+MODEL_PATH=$(sed -nE 's/^[[:space:]]*actor_rollout_ref\.model\.path=([^[:space:]]+).*/\1/p' "$TRAIN_SCRIPT" | tail -n 1)
+ALGORITHM=$(sed -nE 's/^[[:space:]]*algorithm\.adv_estimator=([^[:space:]]+).*/\1/p' "$TRAIN_SCRIPT" | tail -n 1)
+if [[ -z "$MODEL_PATH" || -z "$ALGORITHM" ]]; then
+  echo "Cannot determine model/algorithm defaults from $TRAIN_SCRIPT" >&2
+  exit 2
+fi
+# Strip shell quotes; command-line overrides below take precedence.
+MODEL_PATH="${MODEL_PATH//\'/}"
+MODEL_PATH="${MODEL_PATH//\"/}"
+ALGORITHM="${ALGORITHM//\'/}"
+ALGORITHM="${ALGORITHM//\"/}"
 for arg in "$@"; do
   case "$arg" in
     algorithm.adv_estimator=*|+algorithm.adv_estimator=*|++algorithm.adv_estimator=*)
@@ -70,7 +75,7 @@ done
 # 仓库 ID 和本地路径均取最后一级作为模型名。
 MODEL_NAME="${MODEL_PATH%/}"
 MODEL_NAME="${MODEL_NAME##*/}"
-RUN_NAME="${ALGORITHM//[^a-zA-Z0-9_-]/_}_${MODEL_NAME//[^a-zA-Z0-9._-]/_}_$(date +%Y%m%d_%H%M%S)"
+RUN_NAME="${ALGORITHM//[^a-zA-Z0-9_-]/_}_${MODEL_NAME//[^a-zA-Z0-9._-]/_}_$(TZ=Asia/Shanghai date +%Y%m%d_%H%M%S)"
 export WANDB_DIR="${WANDB_DIR:-$PROJECT_ROOT/outputs/wandb/$RUN_NAME}"
 mkdir -p "$WANDB_DIR"
 echo "W&B 实验名称：$RUN_NAME"
@@ -82,7 +87,7 @@ mkdir -p "$TENSORBOARD_DIR"
 echo "TensorBoard 日志目录：$TENSORBOARD_DIR"
 
 exec bash -e "$PROJECT_ROOT/examples/gigpo_trainer/run_${ENV_NAME}.sh" vllm \
-  'hydra.run.dir='"$PROJECT_ROOT"'/outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}' \
+  "hydra.run.dir=$PROJECT_ROOT/outputs/$RUN_NAME" \
   hydra.job.chdir=False \
   trainer.project_name=nest \
   trainer.experiment_name="$RUN_NAME" \
