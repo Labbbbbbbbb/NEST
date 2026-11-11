@@ -36,7 +36,7 @@ done
 # 仓库 ID 和本地路径均取最后一级作为模型名。
 MODEL_NAME="${MODEL_PATH%/}"
 MODEL_NAME="${MODEL_NAME##*/}"
-RUN_NAME="${ALGORITHM//[^a-zA-Z0-9_-]/_}_${MODEL_NAME//[^a-zA-Z0-9._-]/_}_$(date +%Y%m%d_%H%M%S)"
+RUN_NAME="${ALGORITHM//[^a-zA-Z0-9_-]/_}_${MODEL_NAME//[^a-zA-Z0-9._-]/_}_$(TZ=Asia/Shanghai date +%Y%m%d_%H%M%S)"
 export WANDB_DIR="${WANDB_DIR:-$PROJECT_ROOT/outputs/wandb/$RUN_NAME}"
 mkdir -p "$WANDB_DIR"
 echo "W&B 实验名称：$RUN_NAME"
@@ -49,7 +49,7 @@ echo "TensorBoard 日志目录：$TENSORBOARD_DIR"
 
 
 bash examples/tapo_trainer/run_alfworld.sh vllm \
-    'hydra.run.dir=outputs/tapo/${now:%Y-%m-%d}/${now:%H-%M-%S}' \
+    "hydra.run.dir=$PROJECT_ROOT/outputs/$RUN_NAME" \
     hydra.job.chdir=False \
     trainer.project_name=nest \
     trainer.experiment_name="$RUN_NAME" \
