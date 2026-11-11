@@ -44,6 +44,7 @@ bash scripts/train_gigpo.sh alfworld trainer.total_training_steps=1 trainer.val_
 这不是“单步运行即复现论文”；原示例已有本地小显存改动，见 SOURCE_MANIFEST.json。
 通过 `scripts/train_gigpo.sh` 启动时，默认同时启用 `console`、`wandb` 和 `tensorboard`。
 TensorBoard 标量日志保存在服务器的 `outputs/tensorboard/<算法>_<模型>_<启动时间>/`，每次运行独立保存；启动日志会打印实际路径。
+同一目录还会保存 `config.<运行标识>.json`，包含默认值、命令行覆盖项及展开插值后的完整训练配置（模型、学习率、batch、奖励、环境等）。对应的 `events.out.tfevents.*.<运行标识>` 使用相同后缀；重复使用目录时各次配置不会覆盖。配置在训练循环开始、首次验证之前保存，无需等待 checkpoint。W&B 也已通过 `config` 记录完整配置。
 `tensorboard` 已加入项目依赖；已有环境可执行 `python -m pip install tensorboard`。
 
 ```bash

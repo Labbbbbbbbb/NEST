@@ -113,7 +113,7 @@ class Tracking:
             self.logger["vemlp_wandb"] = vemlp_wandb
 
         if "tensorboard" in default_backend:
-            self.logger["tensorboard"] = _TensorboardAdapter()
+            self.logger["tensorboard"] = _TensorboardAdapter(config=config)
 
         if "console" in default_backend:
             from verl.utils.logger.aggregate_logger import LocalLogger
@@ -193,15 +193,29 @@ class ClearMLLogger:
 
 
 class _TensorboardAdapter:
-    def __init__(self):
+    def __init__(self, config=None):
+        import json
         import os
+        from uuid import uuid4
 
         from torch.utils.tensorboard import SummaryWriter
 
-        tensorboard_dir = os.environ.get("TENSORBOARD_DIR", "tensorboard_log")
-        os.makedirs(tensorboard_dir, exist_ok=True)
+        tensorboard_dir = Path(os.environ.get("TENSORBOARD_DIR", "tensorboard_log"))
+        tensorboard_dir.mkdir(parents=True, exist_ok=True)
+        # Match each configuration snapshot to its event file, even when runs share a directory.
+        run_id = uuid4().hex
+        if config is not None:
+            config_path = tensorboard_dir / f"config.{run_id}.json"
+            config_text = json.dumps(
+                _transform_params_to_json_serializable(config, convert_list_to_dict=False),
+                ensure_ascii=False,
+                indent=2,
+            )
+            with config_path.open("x", encoding="utf-8") as config_file:
+                config_file.write(config_text + "\n")
+            print(f"Saving training config to {config_path}.")
         print(f"Saving tensorboard log to {tensorboard_dir}.")
-        self.writer = SummaryWriter(tensorboard_dir)
+        self.writer = SummaryWriter(str(tensorboard_dir), filename_suffix=f".{run_id}")
 
     def log(self, data, step):
         for key in data:
