@@ -17,6 +17,8 @@ The main entry point to run the PPO algorithm
 
 import logging
 import os
+
+from verl.utils.cuda_memory_snapshot import cuda_memory_snapshot
 import warnings
 from typing import Union
 
@@ -503,6 +505,7 @@ class ActorRolloutRefWorker(Worker):
         return rollout, rollout_sharding_manager
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    @cuda_memory_snapshot
     def init_model(self):
         from verl.workers.actor import DataParallelPPOActor
 
@@ -598,6 +601,7 @@ class ActorRolloutRefWorker(Worker):
             )
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    @cuda_memory_snapshot
     def update_actor(self, data: DataProto):
         # Support all hardwares
         data = data.to(get_torch_device().current_device())
@@ -641,6 +645,7 @@ class ActorRolloutRefWorker(Worker):
         return output
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    @cuda_memory_snapshot
     def generate_sequences(self, prompts: DataProto):
         # Support all hardwares
         prompts = prompts.to(get_torch_device().current_device())
@@ -670,6 +675,7 @@ class ActorRolloutRefWorker(Worker):
 
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    @cuda_memory_snapshot
     def compute_log_prob(self, data: DataProto):
         # when is_lora is True, we use the actor without lora applied to calculate the log_prob
         # which is mostly used for ref log_prob calculation
@@ -712,6 +718,7 @@ class ActorRolloutRefWorker(Worker):
         return output
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    @cuda_memory_snapshot
     def compute_ref_log_prob(self, data: DataProto):
         if self._is_lora:
             # if _is_lora, actor without lora applied is the ref
@@ -1017,6 +1024,7 @@ class CriticWorker(Worker):
         return critic_module, critic_optimizer, critic_lr_scheduler
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    @cuda_memory_snapshot
     def init_model(self):
         # This is used to import external_lib into the huggingface systems
         import_external_libs(self.config.model.get("external_lib", None))
@@ -1246,6 +1254,7 @@ class RewardModelWorker(Worker):
         return reward_module
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    @cuda_memory_snapshot
     def init_model(self):
         # This is used to import external_lib into the huggingface systems
         import_external_libs(self.config.model.get("external_lib", None))
@@ -1452,6 +1461,7 @@ class AsyncActorRolloutRefWorker(ActorRolloutRefWorker):
         return rollout, rollout_sharding_manager
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    @cuda_memory_snapshot
     def generate_sequences(self, prompts: DataProto):
         raise NotImplementedError("AsyncActorRolloutRefWorker does not support generate_sequences")
 

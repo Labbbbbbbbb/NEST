@@ -14,7 +14,7 @@
 sbatch scripts/train_tapo.sh
 ```
 
-脚本默认申请 project3-1 分区的 2 GPU、16 CPU、256G 主机内存。
+脚本默认申请 project3-1 分区的 4 GPU、32 CPU、256G 主机内存。
 CPU 和内存数值是启动配置，不是测量得到的最低需求；GPU 显存是否足够仍取决于卡型。
 检查 `slurm-<jobid>.out` 中的初始化、验证和训练指标。
 
@@ -30,7 +30,7 @@ bash scripts/train_tapo.sh trainer.total_training_steps=1 trainer.val_before_tra
 使用本地缓存模型：
 
 ```bash
-export MODEL_PATH=/absolute/path/to/Qwen2.5-1.5B-Instruct
+export MODEL_PATH=/absolute/path/to/Qwen2.5-7B-Instruct
 sbatch --export=ALL scripts/train_tapo.sh
 ```
 
@@ -56,7 +56,7 @@ A = 0                      # 全成功、全失败或单轨迹组
 M_t = response_mask_t * 1[H(πθ(·|context_t)) > entropy_threshold]
 r_t = πθ(token_t|context_t) / (πref(token_t|context_t) + 1e-8)
 L_TAPO = -mean_valid_rows(mean_selected_tokens(min(r_t*A, clip(r_t,1-ε,1+ε)*A)))
-L = 0.8 * L_TAPO + 0.2 * L_CE_success
+L = 0.8 * L_TAPO + 0.2 * L_CE_success + 0.01 * L_KL
 ```
 
 优势在完整采集批次上按 `uid` 分组、按 `traj_uid` 去重计算，然后再补齐、重排和分发。
@@ -68,8 +68,9 @@ L = 0.8 * L_TAPO + 0.2 * L_CE_success
 `πref` 是训练开始时加载、随后固定的参考模型；即使关闭 KL，也会创建并计算参考策略。
 `old_log_probs` 仍由公共训练框架生成用于诊断，但 TAPO 损失的分母不会使用它。
 熵是完整词表分布的熵，单位为 nats；0.01 是绝对阈值，使用严格 `>`，不是百分位数。
-CE 仅作用于混合组中的成功回答，不做熵过滤。默认不添加 KL；需要时可开启
-`actor_rollout_ref.actor.use_kl_loss=True` 并配置其系数。
+CE 仅作用于混合组中的成功回答，不做熵过滤。与 main 的公共超参数对齐后，默认添加
+`low_var_kl` KL loss，系数为 0.01；可用 `actor_rollout_ref.actor.use_kl_loss=False` 关闭。
+该项是 actor loss 的正则项，不是 reward shaping。
 
 主要参数可通过命令行覆盖：
 
@@ -82,10 +83,10 @@ sbatch scripts/train_tapo.sh \
 ```
 
 `tapo_ce_coef=0` 关闭成功样本 CE；如需单独的 TAPO 项，还可设 `tapo_loss_coef=1.0`。
-默认每任务 8 条轨迹、8 个训练任务和 16 个验证任务。修改采样规模使用环境变量：
+默认每任务 8 条轨迹、16 个训练任务和 128 个验证任务。修改采样规模使用环境变量：
 
 ```bash
-TRAIN_SIZE=8 VAL_SIZE=16 GROUP_SIZE=8 sbatch --export=ALL scripts/train_tapo.sh
+TRAIN_SIZE=16 VAL_SIZE=128 GROUP_SIZE=8 sbatch --export=ALL scripts/train_tapo.sh
 ```
 
 环境 worker 共 `(TRAIN_SIZE * GROUP_SIZE + VAL_SIZE)` 个，各预留 0.1 Ray CPU；
@@ -123,3 +124,57 @@ bash -n scripts/train_tapo.sh examples/tapo_trainer/run_alfworld.sh
 另使用官方 `TAPOLoss` 类对照随机 logits，检查损失值、梯度和空筛选情况一致。
 训练路径测试调用真实优势分发和 actor 更新方法，使用微型 CPU 策略代替 GPU 模型。
 尚未执行完整的多 GPU + vLLM + ALFWorld 训练，需用上述单步命令进行集群验证。
+
+
+## 与 main 同步的输出管理与参数
+
+运行名称为 `<algorithm>_<model basename>_<YYYYMMDD_HHMMSS>`，时间采用 Asia/Shanghai。
+默认示例为 `tapo_Qwen2.5-7B-Instruct_20261115_123456`。名称中的算法和模型读取实际
+训练脚本默认值、环境变量 MODEL_PATH 及命令行覆盖项（最后一个覆盖项生效）。
+通过 `scripts/train_tapo.sh` 启动时，默认目录如下：
+
+```text
+outputs/
+  <RUN_NAME>/
+    .hydra/                         # Hydra 配置、运行配置、命令行覆盖项
+    main_ppo.log                    # Hydra 主进程日志；完整 Slurm 输出另存
+  wandb/<RUN_NAME>/                  # W&B SDK 本地运行文件，初始化失败时可能只有诊断文件
+  tensorboard/<RUN_NAME>/
+    events.out.tfevents.*.<run_id>   # 标量指标；run_id 为 UUID hex
+    config.<run_id>.json            # 解析后的完整训练配置，与事件文件配对
+    memory_snapshots/
+      my_snapshot_<YYYYMMDD_HHMMSS_microseconds>_<host>_rank<rank>_pid<pid>_<stage>.pickle
+checkpoints/nest/<RUN_NAME>/
+  latest_checkpointed_iteration.txt
+  global_step_<step>/
+    actor/                         # 分片 model、optimizer、extra 和模型配置
+    data.pt                        # dataloader 恢复状态；TAPO 不使用 critic
+slurm-<jobid>.out                   # sbatch 默认的 stdout/stderr，含 Ray worker 输出
+```
+
+`WANDB_DIR` 和 `TENSORBOARD_DIR` 可由环境变量覆盖，并传入 Ray worker。
+W&B 初始化使用 30 秒超时；SDK 初始化/认证错误或未安装时打印原因，自动启用
+console 和 TensorBoard，验证样本不再调用未初始化的 W&B。连接成功时三个后端同时使用。
+该回退仅处理初始化阶段，不负责训练中途断网后的动态切换，也不会补传回退期间数据。
+
+CUDA 内存分配历史默认开启，最多保留 100000 条；每个 worker 的模型初始化、
+rollout、actor update、策略及参考策略 log probability 阶段首次成功时保存快照，
+这些阶段发生异常时也尝试保存。快照记录失败不覆盖原训练异常。可在启动前设置
+`CUDA_MEMORY_HISTORY=0` 关闭；CPU 环境自动跳过。只有阶段实际执行且 CUDA API 可用
+时才会产生快照，快照不是模型 checkpoint。
+
+模型 checkpoint 默认每 25 个训练 step 及最终 step 保存；默认保存 model、optimizer、extra。
+每 5 step 验证，训练前先验证，总计 150 epochs。`rollout_data_dir` 和
+`validation_data_dir` 默认均为 null，不自动保存完整轨迹；`log_val_generations=0`。
+TensorBoard 配置 JSON 包含 TAPO 专属参数。
+
+与 main GiGPO 入口同步的主要值：Qwen2.5-7B-Instruct，4 GPU / TP=4，
+train/val batch=16/128，group=8，PPO mini batch=256，actor/rollout/ref micro batch=8，
+rollout max_num_seqs=128、gpu_memory_utilization=0.5、enforce_eager=False，
+KL loss=True、coef=0.01、type=low_var_kl，gamma=0.95。TAPO 优势不使用 gamma。
+学习率 1e-6、prompt/response 长度 2048/512、max_steps=50 等原本一致的参数保持一致。
+Slurm CPU 从 16 调整为 32，以覆盖 25.6 个环境 worker CPU 预留和 GPU worker / TaskRunner。
+
+保留 TAPO 的 estimator、policy loss、熵阈值、CE 权重、二元成功优势及
+`filter_groups.enable=False`、`use_invalid_action_penalty=False`；开启非法动作 reward
+惩罚会违反 TAPO 训练器的二元成功标签校验，因此不从 GiGPO 覆盖此开关。

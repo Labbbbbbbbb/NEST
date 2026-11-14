@@ -16,6 +16,7 @@ A unified tracking interface that supports logging data to different backend
 """
 
 import dataclasses
+import warnings
 from enum import Enum
 from functools import partial
 from pathlib import Path
@@ -38,10 +39,9 @@ class Tracking:
     def __init__(self, project_name, experiment_name, default_backend: Union[str, List[str]] = "console", config=None):
         if isinstance(default_backend, str):
             default_backend = [default_backend]
+        default_backend = list(default_backend)
         for backend in default_backend:
             if backend == "tracking":
-                import warnings
-
                 warnings.warn("`tracking` logger is deprecated. use `wandb` instead.", DeprecationWarning, stacklevel=2)
             else:
                 assert backend in self.supported_backend, f"{backend} is not supported"
@@ -49,10 +49,39 @@ class Tracking:
         self.logger = {}
 
         if "tracking" in default_backend or "wandb" in default_backend:
-            import wandb
+            try:
+                import wandb
+            except ImportError as exc:
+                wandb = None
+                wandb_error = exc
+            else:
+                try:
+                    wandb.init(
+                        project=project_name,
+                        name=experiment_name,
+                        config=config,
+                        settings=wandb.Settings(init_timeout=30),
+                    )
+                except wandb.Error as exc:
+                    wandb_error = exc
+                    # Clean up a partially initialized run before using local loggers.
+                    try:
+                        wandb.finish(exit_code=1)
+                    except Exception:
+                        pass
+                else:
+                    self.logger["wandb"] = wandb
 
-            wandb.init(project=project_name, name=experiment_name, config=config)
-            self.logger["wandb"] = wandb
+            if "wandb" not in self.logger:
+                warnings.warn(
+                    f"W&B initialization failed ({type(wandb_error).__name__}: {wandb_error}). "
+                    "Continuing with console and TensorBoard logging.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                for backend in ("console", "tensorboard"):
+                    if backend not in default_backend:
+                        default_backend.append(backend)
 
         if "mlflow" in default_backend:
             import os
@@ -113,7 +142,7 @@ class Tracking:
             self.logger["vemlp_wandb"] = vemlp_wandb
 
         if "tensorboard" in default_backend:
-            self.logger["tensorboard"] = _TensorboardAdapter()
+            self.logger["tensorboard"] = _TensorboardAdapter(config=config)
 
         if "console" in default_backend:
             from verl.utils.logger.aggregate_logger import LocalLogger
@@ -193,15 +222,29 @@ class ClearMLLogger:
 
 
 class _TensorboardAdapter:
-    def __init__(self):
+    def __init__(self, config=None):
+        import json
         import os
+        from uuid import uuid4
 
         from torch.utils.tensorboard import SummaryWriter
 
-        tensorboard_dir = os.environ.get("TENSORBOARD_DIR", "tensorboard_log")
-        os.makedirs(tensorboard_dir, exist_ok=True)
+        tensorboard_dir = Path(os.environ.get("TENSORBOARD_DIR", "tensorboard_log"))
+        tensorboard_dir.mkdir(parents=True, exist_ok=True)
+        # Match each configuration snapshot to its event file, even when runs share a directory.
+        run_id = uuid4().hex
+        if config is not None:
+            config_path = tensorboard_dir / f"config.{run_id}.json"
+            config_text = json.dumps(
+                _transform_params_to_json_serializable(config, convert_list_to_dict=False),
+                ensure_ascii=False,
+                indent=2,
+            )
+            with config_path.open("x", encoding="utf-8") as config_file:
+                config_file.write(config_text + "\n")
+            print(f"Saving training config to {config_path}.")
         print(f"Saving tensorboard log to {tensorboard_dir}.")
-        self.writer = SummaryWriter(tensorboard_dir)
+        self.writer = SummaryWriter(str(tensorboard_dir), filename_suffix=f".{run_id}")
 
     def log(self, data, step):
         for key in data:
@@ -258,7 +301,11 @@ def _flatten_dict(raw: Dict[str, Any], *, sep: str) -> Dict[str, Any]:
 class ValidationGenerationsLogger:
     def log(self, loggers, samples, step):
         if "wandb" in loggers:
-            self.log_generations_to_wandb(samples, step)
+            import sys
+
+            wandb = sys.modules.get("wandb")
+            if wandb is not None and wandb.run is not None:
+                self.log_generations_to_wandb(samples, step)
         if "swanlab" in loggers:
             self.log_generations_to_swanlab(samples, step)
         if "mlflow" in loggers:

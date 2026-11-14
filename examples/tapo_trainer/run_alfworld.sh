@@ -5,13 +5,14 @@ if [[ $# -gt 0 ]]; then shift; fi
 export VLLM_ATTENTION_BACKEND=FLASH_ATTN
 unset ROCR_VISIBLE_DEVICES HIP_VISIBLE_DEVICES
 
-# 8*8 train actors + 16 validation actors reserve 8 logical CPUs at 0.1 each.
-# Two GPU actors + TaskRunner also need CPUs; request 16 CPUs in Slurm.
-TRAIN_SIZE=${TRAIN_SIZE:-8}
-VAL_SIZE=${VAL_SIZE:-16}
+# Match main GiGPO sampling and GPU defaults; retain TAPO-specific loss settings.
+# 16*8 train actors + 128 validation actors reserve 25.6 logical CPUs at 0.1 each.
+# Four GPU actors and TaskRunner need additional CPUs; request 32 CPUs in Slurm.
+TRAIN_SIZE=${TRAIN_SIZE:-16}
+VAL_SIZE=${VAL_SIZE:-128}
 GROUP_SIZE=${GROUP_SIZE:-8}
-N_GPUS=${N_GPUS:-2}
-RAY_CPUS=${RAY_CPUS:-${SLURM_CPUS_PER_TASK:-16}}
+N_GPUS=${N_GPUS:-4}
+RAY_CPUS=${RAY_CPUS:-${SLURM_CPUS_PER_TASK:-32}}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
 export TOKENIZERS_PARALLELISM=false
 python3 -m examples.data_preprocess.prepare --mode text \
@@ -21,13 +22,16 @@ python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=tapo \
     algorithm.filter_groups.enable=False \
     algorithm.use_kl_in_reward=False \
+    algorithm.gamma=0.95 \
     actor_rollout_ref.actor.policy_loss.loss_mode=tapo \
     +actor_rollout_ref.actor.policy_loss.tapo_entropy_threshold=0.01 \
     +actor_rollout_ref.actor.policy_loss.tapo_epsilon=0.2 \
     +actor_rollout_ref.actor.policy_loss.tapo_loss_coef=0.8 \
     +actor_rollout_ref.actor.policy_loss.tapo_ce_coef=0.2 \
     actor_rollout_ref.actor.entropy_coeff=0 \
-    actor_rollout_ref.actor.use_kl_loss=False \
+    actor_rollout_ref.actor.use_kl_loss=True \
+    actor_rollout_ref.actor.kl_loss_coef=0.01 \
+    actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.actor.use_invalid_action_penalty=False \
     data.train_files="$HOME/data/verl-agent/text/train.parquet" \
     data.val_files="$HOME/data/verl-agent/text/test.parquet" \
@@ -38,24 +42,25 @@ python3 -m verl.trainer.main_ppo \
     data.filter_overlong_prompts=True \
     data.truncation=error \
     data.return_raw_chat=True \
-    actor_rollout_ref.model.path="${MODEL_PATH:-Qwen/Qwen2.5-1.5B-Instruct}" \
+    actor_rollout_ref.model.path="${MODEL_PATH:-Qwen/Qwen2.5-7B-Instruct}" \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.optim.lr=1e-6 \
-    actor_rollout_ref.actor.ppo_mini_batch_size=64 \
-    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=2 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=256 \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8 \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=2 \
+    actor_rollout_ref.rollout.max_num_seqs=128 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8 \
     actor_rollout_ref.rollout.tensor_model_parallel_size="$N_GPUS" \
     actor_rollout_ref.rollout.name="$ENGINE" \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
-    actor_rollout_ref.rollout.enforce_eager=True \
+    actor_rollout_ref.rollout.enforce_eager=False \
     actor_rollout_ref.rollout.free_cache_engine=False \
     actor_rollout_ref.rollout.val_kwargs.temperature=0.4 \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=2 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=8 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     env.env_name=alfworld/AlfredTWEnv \
     env.seed=0 \

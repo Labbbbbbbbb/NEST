@@ -41,10 +41,14 @@ python3 -m examples.data_preprocess.prepare \
 #     data.max_response_length=512	\ 每一步生成的最大 token 数，不是整条 50 步轨迹的总长度
 #     trainer.n_gpus_per_node=1、nnodes=1	决定并行规模、资源池以及部分 batch 的归一化和整除要求
 #     env.resources_per_worker.num_cpus=num_cpus_per_env_worker=1 
+#     actor_rollout_ref.rollout.max_num_seqs=128 \  add by zyt,控制rollout并发，大了容易CUDA OOM，原来是1028
 
 #     ============================以上基本为直接影响显存的参数，调训练效果还要看另外的如奖励系数、学习率等等===============================
 
-
+#模型：
+#    actor_rollout_ref.model.path=Qwen/Qwen2.5-1.5B-Instruct \
+#    actor_rollout_ref.model.path=Qwen/Qwen2.5-7B-Instruct \
+#更改模型时要改experiment_name、actor_rollout_ref.model、然后改显卡数量，n_gpus_per_node、tensor_model_parallel_size
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=gigpo \
@@ -57,7 +61,7 @@ python3 -m verl.trainer.main_ppo \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
     data.return_raw_chat=True \
-    actor_rollout_ref.model.path=Qwen/Qwen2.5-1.5B-Instruct \
+    actor_rollout_ref.model.path=Qwen/Qwen2.5-7B-Instruct \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=256 \
@@ -68,10 +72,11 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
+    actor_rollout_ref.rollout.max_num_seqs=128 \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8 \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=4 \
     actor_rollout_ref.rollout.name=$ENGINE \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
     actor_rollout_ref.rollout.enforce_eager=False \
     actor_rollout_ref.rollout.free_cache_engine=False \
@@ -93,8 +98,8 @@ python3 -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     'trainer.logger=[console,wandb,tensorboard]' \
     trainer.project_name='verl_agent_alfworld' \
-    trainer.experiment_name='gigpo_qwen2.5_1.5b' \
-    trainer.n_gpus_per_node=2 \
+    trainer.experiment_name='gigpo_qwen2.5_7b' \
+    trainer.n_gpus_per_node=4 \
     trainer.nnodes=1 \
     trainer.save_freq=25 \
     trainer.test_freq=5 \
