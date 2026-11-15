@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+#SBATCH --chdir=/data/home/zdhs0200/NEST/ARPO
+#SBATCH --output=/data/home/zdhs0200/NEST/ARPO/slurm-%j.out
+#SBATCH --error=/data/home/zdhs0200/NEST/ARPO/slurm-%j.out
 #SBATCH --job-name=train_arpo
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
