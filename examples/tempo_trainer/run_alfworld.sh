@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # 只修改这一行选择模型，相关参数均在本文件内设置。
-MODEL_SIZE="7B"  # "7B" 或 "1.5B"
+MODEL_SIZE="1.5B"  # "7B" 或 "1.5B"
 case "$MODEL_SIZE" in
   7B)
     MODEL_PATH="Qwen/Qwen2.5-7B-Instruct"

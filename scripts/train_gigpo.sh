@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
+#SBATCH --chdir=/data/home/zdhs0200/NEST/TEMPO
+#SBATCH --output=/data/home/zdhs0200/NEST/TEMPO/slurm-%j.out
+#SBATCH --error=/data/home/zdhs0200/NEST/TEMPO/slurm-%j.out
 # NEST entry point; the original GiGPO implementation remains unchanged.
 
 set -euo pipefail
 
-PROJECT_ROOT="/data/home/zdhs0200/NEST"
+PROJECT_ROOT=${PROJECT_ROOT:-/data/home/zdhs0200/NEST/TEMPO}
 cd "$PROJECT_ROOT"
 
 source /data/apps/apps/Miniconda3/latest/etc/profile.d/conda.sh

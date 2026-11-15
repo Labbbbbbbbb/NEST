@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+#SBATCH --chdir=/data/home/zdhs0200/NEST/TEMPO
+#SBATCH --output=/data/home/zdhs0200/NEST/TEMPO/slurm-%j.out
+#SBATCH --error=/data/home/zdhs0200/NEST/TEMPO/slurm-%j.out
 #SBATCH --job-name=train_tempo
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
