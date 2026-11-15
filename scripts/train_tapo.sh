@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+#SBATCH --chdir=/data/home/zdhs0200/NEST/TAPO
+#SBATCH --output=/data/home/zdhs0200/NEST/TAPO/slurm-%j.out
+#SBATCH --error=/data/home/zdhs0200/NEST/TAPO/slurm-%j.out
 #SBATCH --job-name=train_tapo
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -9,7 +12,7 @@
 #SBATCH --account=project3
 
 set -euo pipefail
-# Slurm executes a spool copy; resolve the repository through the submission dir.
+# Slurm executes a spool copy; use this worktree explicitly.
 PROJECT_ROOT=${PROJECT_ROOT:-/data/home/zdhs0200/NEST/TAPO}
 cd "$PROJECT_ROOT"
 source /data/apps/apps/Miniconda3/latest/etc/profile.d/conda.sh
