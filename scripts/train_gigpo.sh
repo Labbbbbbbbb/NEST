@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # NEST entry point; the original GiGPO implementation remains unchanged.
+#SBATCH --job-name=train_gigpo
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+# Slurm GPU 数在提交时通过 --gres=gpu:N 指定。
+
+#SBATCH --mem=256G
+#SBATCH --partition=project3-1
+#SBATCH --account=project3
 
 set -euo pipefail
 
-PROJECT_ROOT="/data/home/zdhs0200/NEST"
+PROJECT_ROOT=${PROJECT_ROOT:-/data/home/zdhs0200/NEST/GiGPO}
 cd "$PROJECT_ROOT"
 
 source /data/apps/apps/Miniconda3/latest/etc/profile.d/conda.sh
@@ -45,56 +53,13 @@ case "$ENV_NAME" in
   *) echo "Supported wrapper environments: alfworld, webshop, sokoban" >&2; exit 2 ;;
 esac
 
-# Read active literal defaults from the selected training script, avoiding stale copies.
-TRAIN_SCRIPT="$PROJECT_ROOT/examples/gigpo_trainer/run_${ENV_NAME}.sh"
-MODEL_PATH=$(sed -nE 's/^[[:space:]]*actor_rollout_ref\.model\.path=([^[:space:]]+).*/\1/p' "$TRAIN_SCRIPT" | tail -n 1)
-ALGORITHM=$(sed -nE 's/^[[:space:]]*algorithm\.adv_estimator=([^[:space:]]+).*/\1/p' "$TRAIN_SCRIPT" | tail -n 1)
-if [[ -z "$MODEL_PATH" || -z "$ALGORITHM" ]]; then
-  echo "Cannot determine model/algorithm defaults from $TRAIN_SCRIPT" >&2
-  exit 2
-fi
-# Strip shell quotes; command-line overrides below take precedence.
-MODEL_PATH="${MODEL_PATH//\'/}"
-MODEL_PATH="${MODEL_PATH//\"/}"
-ALGORITHM="${ALGORITHM//\'/}"
-ALGORITHM="${ALGORITHM//\"/}"
-for arg in "$@"; do
-  case "$arg" in
-    algorithm.adv_estimator=*|+algorithm.adv_estimator=*|++algorithm.adv_estimator=*)
-      ALGORITHM="${arg#*=}"
-      ALGORITHM="${ALGORITHM//\'/}"
-      ALGORITHM="${ALGORITHM//\"/}"
-      ;;
-    actor_rollout_ref.model.path=*|+actor_rollout_ref.model.path=*|++actor_rollout_ref.model.path=*)
-      MODEL_PATH="${arg#*=}"
-      MODEL_PATH="${MODEL_PATH//\'/}"
-      MODEL_PATH="${MODEL_PATH//\"/}"
-      ;;
-  esac
-done
-# 仓库 ID 和本地路径均取最后一级作为模型名。
-MODEL_NAME="${MODEL_PATH%/}"
-MODEL_NAME="${MODEL_NAME##*/}"
-RUN_NAME="${ALGORITHM//[^a-zA-Z0-9_-]/_}_${MODEL_NAME//[^a-zA-Z0-9._-]/_}_$(TZ=Asia/Shanghai date +%Y%m%d_%H%M%S)"
-export WANDB_DIR="${WANDB_DIR:-$PROJECT_ROOT/outputs/wandb/$RUN_NAME}"
-mkdir -p "$WANDB_DIR"
-echo "W&B 实验名称：$RUN_NAME"
-echo "W&B 本地日志目录：$WANDB_DIR"
-
-# 同时记录到控制台、W&B 和服务器本地 TensorBoard；每次运行独立保存。
-export TENSORBOARD_DIR="${TENSORBOARD_DIR:-$PROJECT_ROOT/outputs/tensorboard/$RUN_NAME}"
-mkdir -p "$TENSORBOARD_DIR"
-echo "TensorBoard 日志目录：$TENSORBOARD_DIR"
-
-exec bash -e "$PROJECT_ROOT/examples/gigpo_trainer/run_${ENV_NAME}.sh" vllm \
-  "hydra.run.dir=$PROJECT_ROOT/outputs/$RUN_NAME" \
-  hydra.job.chdir=False \
-  trainer.project_name=nest \
-  trainer.experiment_name="$RUN_NAME" \
-  'trainer.logger=[console,wandb,tensorboard]' \
-  "++ray_init.runtime_env.env_vars.TENSORBOARD_DIR=$TENSORBOARD_DIR" \
-  "++ray_init.runtime_env.env_vars.WANDB_DIR=$WANDB_DIR" \
-   "$@"
+bash -e "$PROJECT_ROOT/examples/gigpo_trainer/run_${ENV_NAME}.sh" vllm "$@"
 
 
-#sbatch -N 1 --gres=gpu:2 --mem=256G -p project3-1 -A project3 scripts/train_gigpo.sh
+#####提交示例
+#sbatch -N 1 --gres=gpu:4 --mem=256G -p project3-1 -A project3 scripts/train_tapo.sh
+# 7B
+#sbatch --gres=gpu:4 scripts/train_gigpo.sh
+
+# 1.5B
+#sbatch --gres=gpu:2 scripts/train_gigpo.sh
