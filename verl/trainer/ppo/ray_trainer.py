@@ -133,6 +133,7 @@ class AdvantageEstimator(str, Enum):
     RLOO = "rloo"
     GRPO_PASSK = "grpo_passk"
     GiGPO = 'gigpo'
+    ARPO = 'arpo'
 
 
 @dataclass
@@ -431,6 +432,13 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         )
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
+    elif adv_estimator == AdvantageEstimator.ARPO:
+        mask = data.batch["response_mask"]
+        advantages = data.batch["arpo_advantages"].to(mask.device) * mask
+        if multi_turn:
+            advantages *= data.batch["loss_mask"][:, -mask.size(1):]
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = advantages
     elif adv_estimator == AdvantageEstimator.GiGPO:
         # GiGPO 同时考虑“整条轨迹好不好”和“相近观察下，这一步做得好不好”：
         # 最终优势 = episode 级相对优势 + step_advantage_w * step 级相对优势。
@@ -561,7 +569,8 @@ class RayPPOTrainer:
             AdvantageEstimator.REMAX,
             AdvantageEstimator.RLOO,
             AdvantageEstimator.REINFORCE_PLUS_PLUS_BASELINE,
-            AdvantageEstimator.GiGPO
+            AdvantageEstimator.GiGPO,
+            AdvantageEstimator.ARPO
         ]:
             self.use_critic = False
         else:
@@ -576,6 +585,11 @@ class RayPPOTrainer:
         # micro batch：受显存限制，一次前向/反向真正处理的小块，可通过梯度累积组合。
         # rollout.n 表示每个输入的采样次数；Agent 按 step 展开后行数还可能变化。
         config = self.config
+        if config.algorithm.adv_estimator == AdvantageEstimator.ARPO:
+            if config.algorithm.use_kl_in_reward or config.actor_rollout_ref.actor.get("use_invalid_action_penalty", True):
+                raise ValueError("ARPO uses terminal trajectory outcomes; disable reward KL and invalid action penalties (actor KL loss is supported)")
+            if config.actor_rollout_ref.rollout.n != 1:
+                raise ValueError("NEST multi-turn sampling uses env.rollout.n; keep rollout.n=1")
         # number of GPUs total
         n_gpus = config.trainer.n_gpus_per_node * config.trainer.nnodes
 
@@ -1319,6 +1333,18 @@ class RayPPOTrainer:
                     # 使用 collector 返回的完整 step 批次，替换最初的任务批次。
                     # del 仅解除本地名称绑定，不代表强制清空 GPU 显存或删除磁盘数据。
                     batch = gen_batch_output
+
+                    if self.config.algorithm.adv_estimator == AdvantageEstimator.ARPO:
+                        from arpo.core_arpo import trajectory_advantages
+                        values = trajectory_advantages(
+                            batch.non_tensor_batch["uid"], batch.non_tensor_batch["traj_uid"],
+                            batch.non_tensor_batch["episode_rewards"],
+                            normalize=self.config.algorithm.norm_adv_by_std_in_grpo,
+                        )
+                        batch.batch["arpo_advantages"] = values.unsqueeze(-1) * compute_response_mask(batch)
+                        metrics.update(batch.meta_info.get("algorithm_metrics", {}))
+                        metrics["arpo/advantage_abs_mean"] = values.abs().mean().item()
+
 
                     if self.config.algorithm.adv_estimator == AdvantageEstimator.GiGPO:
                         # 【阶段 2：整理经历】先按轨迹顺序计算 G_t = r_t + gamma * G_{t+1}。

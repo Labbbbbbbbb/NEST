@@ -39,6 +39,8 @@ class TrajectoryCollector:
         self.config = config
         self.tokenizer = tokenizer
         self.processor = processor
+        self._arpo_rollout_number = 0
+        self._arpo_metrics = {}
 
     def preprocess_single_sample(
         self,
@@ -261,7 +263,8 @@ class TrajectoryCollector:
         effective_batch = []
         for bs in range(batch_size):
             # sum the rewards for each data in total_batch_list[bs]
-            for data in total_batch_list[bs]:
+            for trajectory_step, data in enumerate(total_batch_list[bs]):
+                data["trajectory_step"] = trajectory_step
                 assert traj_uid[bs] == data['traj_uid'], "data is not from the same trajectory"
                 if data['active_masks']:
                     # episode_rewards
@@ -504,7 +507,11 @@ class TrajectoryCollector:
             gen_batch = gen_batch.repeat(repeat_times=self.config.env.rollout.n, interleave=True)
             
         # Initial observations from the environment
-        if self.config.algorithm.filter_groups.enable and is_train:
+        if self.config.algorithm.adv_estimator == "arpo" and is_train:
+            from arpo.rollout import adaptive_multi_turn_loop
+            total_batch_list, total_episode_rewards, total_episode_lengths, total_success, total_traj_uid, totoal_tool_callings = adaptive_multi_turn_loop(
+                self, gen_batch, actor_rollout_wg, envs)
+        elif self.config.algorithm.filter_groups.enable and is_train:
             # Dynamic Sampling (for DAPO and Dynamic GiGPO)
             total_batch_list, total_episode_rewards, total_episode_lengths, total_success, total_traj_uid, totoal_tool_callings = \
                 self.dynamic_multi_turn_loop(
@@ -535,5 +542,7 @@ class TrajectoryCollector:
             traj_uid=total_traj_uid,
             tool_callings=totoal_tool_callings,
         )
-        
+
+        if self.config.algorithm.adv_estimator == "arpo" and is_train:
+            gen_batch_output.meta_info["algorithm_metrics"] = self._arpo_metrics
         return gen_batch_output

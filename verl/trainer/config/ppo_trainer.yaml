@@ -247,6 +247,11 @@ algorithm:
   pf_ppo:
     reweight_method: pow  # ["pow", "max_min", "max_random"]
     weight_pow: 2.0
+  arpo:
+    initial_rollouts: 4
+    beam_size: 2
+    branch_probability: 0.5
+    entropy_weight: 0.2
   gigpo:
     step_advantage_w: 1.0
     mode: "mean_norm" # "mean_norm" or "mean_std_norm"

@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import os
+from copy import deepcopy
 import yaml
 import gymnasium as gym
 from gymnasium import spaces
@@ -61,6 +62,11 @@ class AlfworldWorker:
     def __init__(self, config, seed, base_env):
         self.env = base_env.init_env(batch_size=1)  # Each worker holds only one sub-environment
         self.env.seed(seed)
+        self.actions = []
+        self.gamefile = None
+        self.initial_observation = None
+        self.current_observation = None
+        self.domain_randomization = bool(config["env"]["domain_randomization"])
     
     def step(self, action):
         """Execute a step in the environment"""
@@ -68,12 +74,50 @@ class AlfworldWorker:
         
         obs, scores, dones, infos = self.env.step(actions)
         infos['observation_text'] = obs
+        self.actions.append(action)
+        self.current_observation = obs[0]
         return obs, scores, dones, infos
     
     def reset(self):
         """Reset the environment"""
         obs, infos = self.env.reset()
         infos['observation_text'] = obs
+        self.actions = []
+        self.gamefile = infos.get("extra.gamefile", [None])[0]
+        self.initial_observation = self.current_observation = obs[0]
+        return obs, infos
+
+    def snapshot(self):
+        if self.domain_randomization:
+            raise ValueError("ARPO deterministic replay requires domain_randomization=False")
+        if not self.gamefile:
+            raise RuntimeError("Cannot fork without the current ALFWorld game file")
+        return {"gamefile": self.gamefile, "actions": list(self.actions),
+                "initial_observation": self.initial_observation,
+                "current_observation": self.current_observation}
+
+    def restore(self, state):
+        """Replay a prefix without consuming the dataset's next-game iterator.
+
+        TextWorld's batched Gym environment chooses its game via this iterator.
+        Temporarily selecting the source game preserves the destination worker's
+        normal reset schedule, including after multiple forks and future epochs.
+        """
+        if self.domain_randomization:
+            raise ValueError("ARPO deterministic replay requires domain_randomization=False")
+        base = getattr(self.env, "unwrapped", self.env)
+        iterator = base._gamefiles_iterator
+        try:
+            base._gamefiles_iterator = iter([state["gamefile"]])
+            obs, infos = self.reset()
+        finally:
+            base._gamefiles_iterator = iterator
+        if obs[0] != state["initial_observation"]:
+            raise RuntimeError("ARPO replay changed the initial observation")
+        for action in state["actions"]:
+            obs, _, _, infos = self.step(action)
+        if obs[0] != state["current_observation"]:
+            raise RuntimeError("ARPO replay failed to reproduce the source observation")
         return obs, infos
     
     def getobs(self):
@@ -106,6 +150,8 @@ class AlfworldEnvs(gym.Env):
             self.workers.append(worker)
 
         self.prev_admissible_commands = [None for _ in range(self.num_processes)]
+        self.active_masks = None
+        self.last_results = [None] * self.num_processes
 
     def step(self, actions):
         assert len(actions) == self.num_processes, \
@@ -113,9 +159,10 @@ class AlfworldEnvs(gym.Env):
 
         # Send step commands to all workers
         futures = []
-        for i, worker in enumerate(self.workers):
-            future = worker.step.remote(actions[i])
-            futures.append(future)
+        active_indices = [i for i in range(self.num_processes)
+                          if self.active_masks is None or self.active_masks[i]]
+        for i in active_indices:
+            futures.append(self.workers[i].step.remote(actions[i]))
 
         # Collect results
         text_obs_list = []
@@ -124,7 +171,9 @@ class AlfworldEnvs(gym.Env):
         dones_list = []
         info_list = []
 
-        results = ray.get(futures)
+        for i, result in zip(active_indices, ray.get(futures)):
+            self.last_results[i] = result
+        results = deepcopy(self.last_results)
         for i, (obs, scores, dones, info) in enumerate(results):
             for k in info.keys():
                 info[k] = info[k][0]
@@ -160,6 +209,7 @@ class AlfworldEnvs(gym.Env):
         # Collect results
         results = ray.get(futures)
         for i, (obs, info) in enumerate(results):
+            self.last_results[i] = (deepcopy(obs), [0.0], [False], deepcopy(info))
             for k in info.keys():
                 info[k] = info[k][0] 
             text_obs_list.append(obs[0])
@@ -172,6 +222,16 @@ class AlfworldEnvs(gym.Env):
             image_obs_list = None
 
         return text_obs_list, image_obs_list, info_list
+
+    def fork(self, source, target):
+        if self.multi_modal:
+            raise ValueError("ARPO replay only supports text ALFWorld")
+        if source // self.group_n != target // self.group_n:
+            raise ValueError("ARPO may only fork within the same task group")
+        state = ray.get(self.workers[source].snapshot.remote())
+        obs, info = ray.get(self.workers[target].restore.remote(state))
+        self.prev_admissible_commands[target] = deepcopy(info['admissible_commands'][0])
+        self.last_results[target] = (deepcopy(obs), [0.0], [False], deepcopy(info))
 
     def getobs(self):
         """

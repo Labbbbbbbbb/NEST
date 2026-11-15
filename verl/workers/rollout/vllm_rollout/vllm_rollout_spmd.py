@@ -310,6 +310,9 @@ class vLLMRollout(BaseRollout):
                 "n": 1,  # if validate, already repeat in ray_trainer
             }
 
+        if prompts.meta_info.get("arpo_entropy", False):
+            kwargs["logprobs"] = 10
+
         lora_requests = None
         if self.lora_kwargs:
             lora_int_ids = list(self.inference_engine.llm_engine.list_loras())
@@ -329,10 +332,15 @@ class vLLMRollout(BaseRollout):
             # TODO(sgm): disable logprob when recompute_log_prob is enable
             # if n = 1: (bs, response_length) ; if n > 1: (bs * n, response_length)
 
+            arpo_entropies = []
             response = []
             rollout_log_probs = []
             for output in outputs:
                 for sample_id in range(len(output.outputs)):
+                    if prompts.meta_info.get("arpo_entropy", False):
+                        from arpo.core_arpo import normalized_topk_entropy
+                        arpo_entropies.append(normalized_topk_entropy(
+                            output.outputs[sample_id].logprobs, len(self.tokenizer)))
                     response_ids = output.outputs[sample_id].token_ids
                     response.append(response_ids)
                     curr_log_prob = []
@@ -394,6 +402,8 @@ class vLLMRollout(BaseRollout):
         ):
             self.inference_engine.free_cache_engine()
 
+        if prompts.meta_info.get("arpo_entropy", False):
+            non_tensor_batch["arpo_entropy"] = np.asarray(arpo_entropies, dtype=np.float32)
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
 
 

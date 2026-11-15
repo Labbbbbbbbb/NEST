@@ -1,3 +1,5 @@
+> NEST ARPO 分支：ALFWorld 适配、参数与启动命令见 [docs/arpo_nest.md](docs/arpo_nest.md)。
+
 # NEST
 
 面向多轮 LLM Agent 细粒度信用分配研究的精简工作仓库，基于本地 verl-agent 工作树创建。
