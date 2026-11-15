@@ -261,7 +261,8 @@ class TrajectoryCollector:
         effective_batch = []
         for bs in range(batch_size):
             # sum the rewards for each data in total_batch_list[bs]
-            for data in total_batch_list[bs]:
+            for trajectory_step, data in enumerate(total_batch_list[bs]):
+                data["trajectory_step"] = trajectory_step
                 assert traj_uid[bs] == data['traj_uid'], "data is not from the same trajectory"
                 if data['active_masks']:
                     # episode_rewards
