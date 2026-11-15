@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+#SBATCH --chdir=/data/home/zdhs0200/NEST/GiGPO
+#SBATCH --output=/data/home/zdhs0200/NEST/GiGPO/slurm-%j.out
+#SBATCH --error=/data/home/zdhs0200/NEST/GiGPO/slurm-%j.out
 # NEST entry point; the original GiGPO implementation remains unchanged.
 #SBATCH --job-name=train_gigpo
 #SBATCH --nodes=1
