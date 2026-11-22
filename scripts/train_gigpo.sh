@@ -17,6 +17,16 @@ set -euo pipefail
 PROJECT_ROOT=${PROJECT_ROOT:-/data/home/zdhs0200/NEST/GiGPO}
 cd "$PROJECT_ROOT"
 
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    job_output_dir="$PROJECT_ROOT/outputs/$SLURM_JOB_ID"
+    mkdir -p "$job_output_dir"
+    # Slurm opens stdout and stderr before the job can create its output directory.
+    slurm_log="/data/home/zdhs0200/NEST/GiGPO/slurm-$SLURM_JOB_ID.out"
+    if [[ "$slurm_log" -ef /dev/stdout && "$slurm_log" -ef /dev/stderr ]]; then
+        mv -T -- "$slurm_log" "$job_output_dir/slurm-$SLURM_JOB_ID.out"
+    fi
+fi
+
 source /data/apps/apps/Miniconda3/latest/etc/profile.d/conda.sh
 conda activate NEST
 
