@@ -9,6 +9,16 @@ set -euo pipefail
 PROJECT_ROOT=${PROJECT_ROOT:-/data/home/zdhs0200/NEST/ARPO}
 cd "$PROJECT_ROOT"
 
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    job_output_dir="$PROJECT_ROOT/outputs/$SLURM_JOB_ID"
+    mkdir -p "$job_output_dir"
+    # Slurm opens stdout and stderr before the job can create its output directory.
+    slurm_log="/data/home/zdhs0200/NEST/ARPO/slurm-$SLURM_JOB_ID.out"
+    if [[ "$slurm_log" -ef /dev/stdout && "$slurm_log" -ef /dev/stderr ]]; then
+        mv -T -- "$slurm_log" "$job_output_dir/slurm-$SLURM_JOB_ID.out"
+    fi
+fi
+
 source /data/apps/apps/Miniconda3/latest/etc/profile.d/conda.sh
 conda activate NEST
 
@@ -79,18 +89,27 @@ done
 MODEL_NAME="${MODEL_PATH%/}"
 MODEL_NAME="${MODEL_NAME##*/}"
 RUN_NAME="${ALGORITHM//[^a-zA-Z0-9_-]/_}_${MODEL_NAME//[^a-zA-Z0-9._-]/_}_$(TZ=Asia/Shanghai date +%Y%m%d_%H%M%S)"
-export WANDB_DIR="${WANDB_DIR:-$PROJECT_ROOT/outputs/wandb/$RUN_NAME}"
+config_dir="$PROJECT_ROOT/outputs/$RUN_NAME"
+wandb_dir="$PROJECT_ROOT/outputs/wandb/$RUN_NAME"
+tensor_dir="$PROJECT_ROOT/outputs/tensorboard/$RUN_NAME"
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    job_output_dir="$PROJECT_ROOT/outputs/$SLURM_JOB_ID"
+    config_dir="$job_output_dir/config_$RUN_NAME"
+    wandb_dir="$job_output_dir/wandb_$RUN_NAME"
+    tensor_dir="$job_output_dir/tensor_$RUN_NAME"
+fi
+export WANDB_DIR="${WANDB_DIR:-$wandb_dir}"
 mkdir -p "$WANDB_DIR"
 echo "W&B 实验名称：$RUN_NAME"
 echo "W&B 本地日志目录：$WANDB_DIR"
 
 # 同时记录到控制台、W&B 和服务器本地 TensorBoard；每次运行独立保存。
-export TENSORBOARD_DIR="${TENSORBOARD_DIR:-$PROJECT_ROOT/outputs/tensorboard/$RUN_NAME}"
+export TENSORBOARD_DIR="${TENSORBOARD_DIR:-$tensor_dir}"
 mkdir -p "$TENSORBOARD_DIR"
 echo "TensorBoard 日志目录：$TENSORBOARD_DIR"
 
 exec bash -e "$PROJECT_ROOT/examples/gigpo_trainer/run_${ENV_NAME}.sh" vllm \
-  "hydra.run.dir=$PROJECT_ROOT/outputs/$RUN_NAME" \
+  "hydra.run.dir=$config_dir" \
   hydra.job.chdir=False \
   trainer.project_name=nest \
   trainer.experiment_name="$RUN_NAME" \
