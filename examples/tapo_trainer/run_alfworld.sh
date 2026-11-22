@@ -16,9 +16,9 @@ case "$MODEL_SIZE" in
     MODEL_PATH="Qwen/Qwen2.5-1.5B-Instruct"
     N_GPUS=2
     TP_SIZE=2
-    PPO_MICRO_BATCH_SIZE=32
-    ROLLOUT_LOG_PROB_MICRO_BATCH_SIZE=32
-    REF_LOG_PROB_MICRO_BATCH_SIZE=32
+    PPO_MICRO_BATCH_SIZE=8
+    ROLLOUT_LOG_PROB_MICRO_BATCH_SIZE=8
+    REF_LOG_PROB_MICRO_BATCH_SIZE=8
     GPU_MEMORY_UTILIZATION=0.6
     ;;
   *) echo "MODEL_SIZE 只能是 7B 或 1.5B" >&2; exit 2 ;;
@@ -57,8 +57,17 @@ done
 MODEL_NAME="${LOG_MODEL_PATH%/}"
 MODEL_NAME="${MODEL_NAME##*/}"
 RUN_NAME="tapo_${MODEL_NAME//[^a-zA-Z0-9._-]/_}_$(TZ=Asia/Shanghai date +%Y%m%d_%H%M%S)"
-export WANDB_DIR="$PROJECT_ROOT/outputs/wandb/$RUN_NAME"
-export TENSORBOARD_DIR="$PROJECT_ROOT/outputs/tensorboard/$RUN_NAME"
+config_dir="$PROJECT_ROOT/outputs/$RUN_NAME"
+wandb_dir="$PROJECT_ROOT/outputs/wandb/$RUN_NAME"
+tensor_dir="$PROJECT_ROOT/outputs/tensorboard/$RUN_NAME"
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    job_output_dir="$PROJECT_ROOT/outputs/$SLURM_JOB_ID"
+    config_dir="$job_output_dir/config_$RUN_NAME"
+    wandb_dir="$job_output_dir/wandb_$RUN_NAME"
+    tensor_dir="$job_output_dir/tensor_$RUN_NAME"
+fi
+export WANDB_DIR="$wandb_dir"
+export TENSORBOARD_DIR="$tensor_dir"
 mkdir -p "$WANDB_DIR" "$TENSORBOARD_DIR"
 echo "Model: $MODEL_PATH; GPUs: $N_GPUS; micro batch: $PPO_MICRO_BATCH_SIZE; run: $RUN_NAME"
 
@@ -122,7 +131,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.test_freq=5 \
     trainer.total_epochs=150 \
     trainer.val_before_train=True \
-    "hydra.run.dir=$PROJECT_ROOT/outputs/$RUN_NAME" \
+    "hydra.run.dir=$config_dir" \
     hydra.job.chdir=False \
     "++ray_init.runtime_env.env_vars.WANDB_DIR=$WANDB_DIR" \
     "++ray_init.runtime_env.env_vars.TENSORBOARD_DIR=$TENSORBOARD_DIR" \

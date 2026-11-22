@@ -418,7 +418,8 @@ class DataParallelPPOActor(BasePPOActor):
                         ce_loss = -sample_mean(log_prob, ce_mask)
                         pg_loss = pg_loss + tapo_config.get("tapo_ce_coef", 0.2) * ce_loss
                         append_to_dict(metrics, {"actor/tapo_ce_loss": ce_loss.detach().item()})
-                        pg_clipfrac = ppo_kl = pg_clipfrac_lower = log_prob.detach().new_zeros(())
+                        pg_clipfrac = ppo_kl = pg_clipfrac_lower = log_prob.detach().new_zeros(())  
+                        # pg_clipfrac统计有多少 token 实际触发了裁剪，这里直接填了0，相当于一个占位置
                     else:
                         pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(
                             old_log_prob=old_log_prob,
